@@ -1,9 +1,6 @@
 // --- Supabase setup ---
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseUrl = 'https://upznvkoiiiazvnuowhdr.supabase.co'
-const supabaseKey = 'sb_publishable_TaFJ0GGjMhmCGnGi4N4dyA_auGwFljE'
-const supabase = createClient(supabaseUrl, supabaseKey)
+// Using global supabase variable from CDN
+// The supabase client is already initialized in index.html
 
 // Helper function to ensure DOM is ready
 function onDOMReady(callback) {
@@ -19,6 +16,7 @@ let students = [];
 let absences = [];
 let reports = [];
 let homeworks = {};
+let rooms = [];
 let currentUser = '';
 let currentSection = 'dashboard';
 
@@ -34,6 +32,160 @@ const users = {
     'Belen': 'star65',
     'Adolfo': 'king999'
 };
+
+// --- Save/Load functions ---
+async function saveData() {
+    try {
+        // Save students
+        if (students.length > 0) {
+            const { error } = await supabase
+                .from('students')
+                .upsert(students, { onConflict: 'id' });
+            if (error) console.error('Error saving students:', error);
+        }
+
+        // Save absences
+        if (absences.length > 0) {
+            const { error } = await supabase
+                .from('absences')
+                .upsert(absences, { onConflict: 'id' });
+            if (error) console.error('Error saving absences:', error);
+        }
+
+        // Save reports
+        if (reports.length > 0) {
+            const { error } = await supabase
+                .from('reports')
+                .upsert(reports, { onConflict: 'id' });
+            if (error) console.error('Error saving reports:', error);
+        }
+
+        // Also save to localStorage as backup
+        localStorage.setItem('students', JSON.stringify(students));
+        localStorage.setItem('absences', JSON.stringify(absences));
+        localStorage.setItem('reports', JSON.stringify(reports));
+    } catch (error) {
+        console.error('Error saving data:', error);
+    }
+}
+
+async function getStudents() {
+    return students || [];
+}
+
+async function addStudent(alumno) {
+    const student = {
+        id: Date.now(),
+        nombre: alumno.nombre,
+        apellidos: alumno.apellidos || '',
+        curso: alumno.curso || '',
+        telefono1: alumno.telefono || '',
+        telefono2: '',
+        fechaNacimiento: '',
+        gender: 'otro',
+        habitacion: null,
+        cama: null
+    };
+    students.push(student);
+    
+    // Save to Supabase immediately
+    try {
+        const { error } = await supabase
+            .from('students')
+            .insert([student]);
+        if (error) {
+            console.error('Error adding student to Supabase:', error);
+        }
+    } catch (error) {
+        console.error('Error:', error);
+    }
+    
+    return student;
+}
+
+// Setup real-time subscriptions for students
+function setupRealtimeSubscriptions() {
+    try {
+        // Subscribe to students changes
+        supabase
+            .channel('public:students')
+            .on('postgres_changes', 
+                { event: '*', schema: 'public', table: 'students' },
+                (payload) => {
+                    console.log('Students update:', payload);
+                    if (payload.eventType === 'INSERT') {
+                        const student = payload.new;
+                        if (!students.find(s => s.id === student.id)) {
+                            students.push(student);
+                        }
+                    } else if (payload.eventType === 'UPDATE') {
+                        const idx = students.findIndex(s => s.id === payload.new.id);
+                        if (idx >= 0) {
+                            students[idx] = payload.new;
+                        }
+                    } else if (payload.eventType === 'DELETE') {
+                        students = students.filter(s => s.id !== payload.old.id);
+                    }
+                    updateStudentsTable();
+                    updateDashboard();
+                    populateDropdowns();
+                }
+            )
+            .subscribe();
+
+        // Subscribe to absences changes
+        supabase
+            .channel('public:absences')
+            .on('postgres_changes', 
+                { event: '*', schema: 'public', table: 'absences' },
+                (payload) => {
+                    console.log('Absences update:', payload);
+                    if (payload.eventType === 'INSERT') {
+                        if (!absences.find(a => a.id === payload.new.id)) {
+                            absences.push(payload.new);
+                        }
+                    } else if (payload.eventType === 'UPDATE') {
+                        const idx = absences.findIndex(a => a.id === payload.new.id);
+                        if (idx >= 0) {
+                            absences[idx] = payload.new;
+                        }
+                    } else if (payload.eventType === 'DELETE') {
+                        absences = absences.filter(a => a.id !== payload.old.id);
+                    }
+                    updateAbsencesTable();
+                    updateDashboard();
+                }
+            )
+            .subscribe();
+
+        // Subscribe to reports changes
+        supabase
+            .channel('public:reports')
+            .on('postgres_changes', 
+                { event: '*', schema: 'public', table: 'reports' },
+                (payload) => {
+                    console.log('Reports update:', payload);
+                    if (payload.eventType === 'INSERT') {
+                        if (!reports.find(r => r.id === payload.new.id)) {
+                            reports.push(payload.new);
+                        }
+                    } else if (payload.eventType === 'UPDATE') {
+                        const idx = reports.findIndex(r => r.id === payload.new.id);
+                        if (idx >= 0) {
+                            reports[idx] = payload.new;
+                        }
+                    } else if (payload.eventType === 'DELETE') {
+                        reports = reports.filter(r => r.id !== payload.old.id);
+                    }
+                    updateReportsTable();
+                    updateDashboard();
+                }
+            )
+            .subscribe();
+    } catch (error) {
+        console.error('Error setting up subscriptions:', error);
+    }
+}
 
 // Initialize rooms
 function initializeRooms() {
@@ -168,87 +320,88 @@ function createConfetti() {
 
 // --- Load data from Supabase ---
 async function loadData() {
-    // Fetch students
-    const { data: studentsData, error: studentsError } = await supabase
-        .from('students')
-        .select('*');
+    try {
+        // Fetch students
+        const { data: studentsData, error: studentsError } = await supabase
+            .from('students')
+            .select('*');
 
-    students = studentsError ? [] : studentsData;
-    if (studentsError) console.error('Error loading students:', studentsError);
+        students = studentsError ? [] : (studentsData || []);
+        if (studentsError) console.error('Error loading students:', studentsError);
 
-    // Fetch absences
-    const { data: absencesData, error: absencesError } = await supabase
-        .from('absences')
-        .select('*');
+        // Fetch absences
+        const { data: absencesData, error: absencesError } = await supabase
+            .from('absences')
+            .select('*');
 
-    absences = absencesError ? [] : absencesData;
-    if (absencesError) console.error('Error loading absences:', absencesError);
+        absences = absencesError ? [] : (absencesData || []);
+        if (absencesError) console.error('Error loading absences:', absencesError);
 
-    // Fetch reports
-    const { data: reportsData, error: reportsError } = await supabase
-        .from('reports')
-        .select('*');
+        // Fetch reports
+        const { data: reportsData, error: reportsError } = await supabase
+            .from('reports')
+            .select('*');
 
-    reports = reportsError ? [] : reportsData;
-    if (reportsError) console.error('Error loading reports:', reportsError);
+        reports = reportsError ? [] : (reportsData || []);
+        if (reportsError) console.error('Error loading reports:', reportsError);
 
-    // Initialize UI
-    initializeRooms();
-    updateDashboard();
-    updateStudentsTable();
-    updateRoomsGrid();
-    updateAbsencesTable();
-    updateReportsTable();
-    populateDropdowns();
-    loadHomeworks(); // optional
-    renderAgenda();
-    checkBirthdays();
+        // Initialize UI
+        initializeRooms();
+        updateDashboard();
+        updateStudentsTable();
+        updateRoomsGrid();
+        updateAbsencesTable();
+        updateReportsTable();
+        populateDropdowns();
+        loadHomeworks(); // optional
+        renderAgenda();
+        checkBirthdays();
 
-    // Optional: save fetched data to localStorage
-    localStorage.setItem('students', JSON.stringify(students));
-    localStorage.setItem('absences', JSON.stringify(absences));
-    localStorage.setItem('reports', JSON.stringify(reports));
-}
+        // Setup real-time subscriptions
+        setupRealtimeSubscriptions();
 
-// --- Save functions ---
-async function saveStudent(student) {
-    const { error } = await supabase
-        .from('students')
-        .upsert(student, { onConflict: ['id'] });
-    if (error) console.error('Error saving student:', error);
-}
-
-async function saveAbsence(absence) {
-    const { error } = await supabase
-        .from('absences')
-        .upsert(absence, { onConflict: ['id'] });
-    if (error) console.error('Error saving absence:', error);
-}
-
-async function saveReport(report) {
-    const { error } = await supabase
-        .from('reports')
-        .upsert(report, { onConflict: ['id'] });
-    if (error) console.error('Error saving report:', error);
+        // Save to localStorage as backup
+        localStorage.setItem('students', JSON.stringify(students));
+        localStorage.setItem('absences', JSON.stringify(absences));
+        localStorage.setItem('reports', JSON.stringify(reports));
+    } catch (error) {
+        console.error('Error loading data:', error);
+        // Fallback to localStorage if Supabase fails
+        const localStudents = localStorage.getItem('students');
+        const localAbsences = localStorage.getItem('absences');
+        const localReports = localStorage.getItem('reports');
+        
+        students = localStudents ? JSON.parse(localStudents) : [];
+        absences = localAbsences ? JSON.parse(localAbsences) : [];
+        reports = localReports ? JSON.parse(localReports) : [];
+        
+        initializeRooms();
+        updateDashboard();
+        updateStudentsTable();
+        updateRoomsGrid();
+        updateAbsencesTable();
+        updateReportsTable();
+        populateDropdowns();
+        loadHomeworks();
+        renderAgenda();
+        checkBirthdays();
+    }
 }
 
 // --- Add new student example ---
-async function addNewStudent(student) {
-    students.push(student);
-    await saveStudent(student);
-    updateDashboard();
-    updateStudentsTable();
-}
-
-// --- Initialize app ---
 async function initApp() {
     await loadData();
 }
 
-initApp();
+// Initialize event listeners when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize app
+    initApp();
 
-// Login functionality
-document.getElementById('loginForm').addEventListener('submit', function(e) {
+    // Login functionality
+    const loginForm = document.getElementById('loginForm');
+    if (loginForm) {
+        loginForm.addEventListener('submit', function(e) {
     e.preventDefault();
     
     const username = document.getElementById('username').value;
@@ -267,33 +420,44 @@ document.getElementById('loginForm').addEventListener('submit', function(e) {
         errorDiv.textContent = 'Usuario o contraseña incorrectos';
         errorDiv.classList.remove('hidden');
     }
-});
+        });
+    }
 
-// Logout functionality
-document.getElementById('logoutBtn').addEventListener('click', function() {
+    // Logout functionality
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', function() {
     currentUser = '';
     document.getElementById('username').value = '';
     document.getElementById('password').value = '';
     document.getElementById('loginScreen').classList.remove('hidden');
     document.getElementById('mainApp').classList.add('hidden');
     document.getElementById('loginError').classList.add('hidden');
-});
+        });
+    }
 
-// Navigation functionality
-document.querySelectorAll('.nav-link').forEach(link => {
-    link.addEventListener('click', function(e) {
-        e.preventDefault();
-        const section = this.getAttribute('data-section');
-        showSection(section);
+    // Navigation functionality
+    document.querySelectorAll('.nav-link').forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            const section = this.getAttribute('data-section');
+            showSection(section);
+        });
     });
-});
 
-document.getElementById('mobileNav').addEventListener('change', function() {
-    showSection(this.value);
-});
+    const mobileNav = document.getElementById('mobileNav');
+    if (mobileNav) {
+        mobileNav.addEventListener('change', function() {
+            showSection(this.value);
+        });
+    }
 
-// When selecting a student in the assign form, refresh available rooms
-document.getElementById('roomStudent')?.addEventListener('change', populateDropdowns);
+    // When selecting a student in the assign form, refresh available rooms
+    const roomStudent = document.getElementById('roomStudent');
+    if (roomStudent) {
+        roomStudent.addEventListener('change', populateDropdowns);
+    }
+});
 
 function showSection(sectionName) {
     document.querySelectorAll('.content-section').forEach(section => {
@@ -304,7 +468,7 @@ function showSection(sectionName) {
 }
 
 // Add student functionality
-document.getElementById('addStudentForm').addEventListener('submit', function(e) {
+document.getElementById('addStudentForm').addEventListener('submit', async function(e) {
     e.preventDefault();
 
     const student = {
@@ -324,6 +488,17 @@ document.getElementById('addStudentForm').addEventListener('submit', function(e)
     student.ageGroup = (age !== null && age >= 18) ? 'mayor' : 'menor';
 
     students.push(student);
+    
+    // Save to Supabase
+    try {
+        const { error } = await supabase
+            .from('students')
+            .insert([student]);
+        if (error) console.error('Error adding student:', error);
+    } catch (error) {
+        console.error('Error:', error);
+    }
+    
     saveData();
     updateDashboard();
     updateStudentsTable();
@@ -520,7 +695,7 @@ function updateAbsencesTable() {
 }
 
 // Assign room functionality
-document.getElementById('assignRoomForm').addEventListener('submit', function(e) {
+document.getElementById('assignRoomForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     
     const studentId = parseInt(document.getElementById('roomStudent').value);
@@ -570,6 +745,17 @@ document.getElementById('assignRoomForm').addEventListener('submit', function(e)
     room.beds[emptyBed] = studentId;
     room.occupied++;
     
+    // Save to Supabase
+    try {
+        const { error } = await supabase
+            .from('students')
+            .update({ habitacion: roomNumber, cama: emptyBed })
+            .eq('id', studentId);
+        if (error) console.error('Error updating student room:', error);
+    } catch (error) {
+        console.error('Error:', error);
+    }
+    
     saveData();
     updateDashboard();
     updateStudentsTable();
@@ -583,7 +769,7 @@ document.getElementById('assignRoomForm').addEventListener('submit', function(e)
 });
 
 // Add absence functionality
-document.getElementById('addAbsenceForm').addEventListener('submit', function(e) {
+document.getElementById('addAbsenceForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     
     const absence = {
@@ -594,6 +780,17 @@ document.getElementById('addAbsenceForm').addEventListener('submit', function(e)
     };
     
     absences.push(absence);
+    
+    // Save to Supabase
+    try {
+        const { error } = await supabase
+            .from('absences')
+            .insert([absence]);
+        if (error) console.error('Error adding absence:', error);
+    } catch (error) {
+        console.error('Error:', error);
+    }
+    
     saveData();
     updateDashboard();
     updateAbsencesTable();
@@ -611,7 +808,7 @@ document.getElementById('addAbsenceForm').addEventListener('submit', function(e)
 });
 
 // Add report ('parte') functionality
-document.getElementById('addReportForm')?.addEventListener('submit', function(e) {
+document.getElementById('addReportForm')?.addEventListener('submit', async function(e) {
     if (!e) return; // guard
     e.preventDefault();
 
@@ -624,6 +821,17 @@ document.getElementById('addReportForm')?.addEventListener('submit', function(e)
     };
 
     reports.push(report);
+    
+    // Save to Supabase
+    try {
+        const { error } = await supabase
+            .from('reports')
+            .insert([report]);
+        if (error) console.error('Error adding report:', error);
+    } catch (error) {
+        console.error('Error:', error);
+    }
+    
     saveData();
     updateReportsTable();
     
@@ -815,7 +1023,7 @@ function updateReportsTable() {
 }
 
 // Seguimiento académico
-document.getElementById('addSeguimientoForm')?.addEventListener('submit', function(e) {
+document.getElementById('addSeguimientoForm')?.addEventListener('submit', async function(e) {
     if (!e) return;
     e.preventDefault();
 
@@ -846,6 +1054,18 @@ document.getElementById('addSeguimientoForm')?.addEventListener('submit', functi
     };
 
     student.academic.records.push(record);
+    
+    // Save to Supabase
+    try {
+        const { error } = await supabase
+            .from('students')
+            .update({ academic: student.academic })
+            .eq('id', studentId);
+        if (error) console.error('Error adding academic record:', error);
+    } catch (error) {
+        console.error('Error:', error);
+    }
+    
     saveData();
     updateSeguimientoTable(studentId);
     
@@ -1009,9 +1229,20 @@ function openStudentSeguimiento(studentId) {
 }
 
 // Delete report
-function deleteReport(reportId) {
+async function deleteReport(reportId) {
     if (confirm('¿Está seguro de eliminar este parte?')) {
         reports = reports.filter(r => r.id !== reportId);
+        
+        // Delete from Supabase
+        try {
+            await supabase
+                .from('reports')
+                .delete()
+                .eq('id', reportId);
+        } catch (error) {
+            console.error('Error deleting report:', error);
+        }
+        
         saveData();
         updateReportsTable();
         addActivity('Parte eliminado');
@@ -1028,12 +1259,12 @@ document.getElementById('clearFilters').addEventListener('click', function() {
 });
 
 // Delete student
-function deleteStudent(studentId) {
+async function deleteStudent(studentId) {
     if (confirm('¿Está seguro de eliminar este alumno?')) {
         const student = students.find(s => s.id === studentId);
 
         // Remove from room
-        if (student.habitacion) {
+        if (student && student.habitacion) {
             const room = rooms.find(r => r.number === student.habitacion);
             if (room && student.cama) {
                 room.beds[student.cama] = null;
@@ -1047,6 +1278,22 @@ function deleteStudent(studentId) {
         // Remove related absences
         absences = absences.filter(a => a.studentId !== studentId);
 
+        // Delete from Supabase
+        try {
+            await supabase
+                .from('students')
+                .delete()
+                .eq('id', studentId);
+            
+            // Delete related absences from Supabase
+            await supabase
+                .from('absences')
+                .delete()
+                .eq('studentId', studentId);
+        } catch (error) {
+            console.error('Error deleting student:', error);
+        }
+
         saveData();
         updateDashboard();
         updateStudentsTable();
@@ -1054,14 +1301,25 @@ function deleteStudent(studentId) {
         updateAbsencesTable();
         populateDropdowns();
 
-        addActivity(`Alumno eliminado: ${student.nombre}`);
+        addActivity(`Alumno eliminado: ${student ? student.nombre : 'ID: ' + studentId}`);
     }
 }
 
 // Delete absence
-function deleteAbsence(absenceId) {
+async function deleteAbsence(absenceId) {
     if (confirm('¿Está seguro de eliminar esta falta?')) {
         absences = absences.filter(a => a.id !== absenceId);
+        
+        // Delete from Supabase
+        try {
+            await supabase
+                .from('absences')
+                .delete()
+                .eq('id', absenceId);
+        } catch (error) {
+            console.error('Error deleting absence:', error);
+        }
+        
         saveData();
         updateDashboard();
         updateAbsencesTable();
@@ -1417,228 +1675,4 @@ onDOMReady(() => {
     if (absenceDate) absenceDate.valueAsDate = new Date();
     const reportDate = document.getElementById('reportDate');
     if (reportDate) reportDate.valueAsDate = new Date();
-});
-
-// Initialize the application
-document.addEventListener('DOMContentLoaded', function() {
-    // Load data on page load
-    loadData();
-
-    // Login functionality
-    const loginForm = document.getElementById('loginForm');
-    if (loginForm) {
-        loginForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            const errorDiv = document.getElementById('loginError');
-
-            if (users[username] && users[username] === password) {
-                currentUser = username;
-                document.getElementById('currentUser').textContent = `Bienvenido, ${username}`;
-                document.getElementById('loginScreen').classList.add('hidden');
-                document.getElementById('mainApp').classList.remove('hidden');
-                loadData();
-                showSection('dashboard');
-                errorDiv.classList.add('hidden');
-            } else {
-                errorDiv.textContent = 'Usuario o contraseña incorrectos';
-                errorDiv.classList.remove('hidden');
-            }
-        });
-    }
-
-    // Logout functionality
-    const logoutBtn = document.getElementById('logoutBtn');
-    if (logoutBtn) {
-        logoutBtn.addEventListener('click', function() {
-            currentUser = '';
-            document.getElementById('username').value = '';
-            document.getElementById('password').value = '';
-            document.getElementById('loginScreen').classList.remove('hidden');
-            document.getElementById('mainApp').classList.add('hidden');
-            document.getElementById('loginError').classList.add('hidden');
-        });
-    }
-
-    // Navigation functionality
-    document.querySelectorAll('.nav-link').forEach(link => {
-        link.addEventListener('click', function(e) {
-            e.preventDefault();
-            const section = this.getAttribute('data-section');
-            showSection(section);
-        });
-    });
-
-    const mobileNav = document.getElementById('mobileNav');
-    if (mobileNav) {
-        mobileNav.addEventListener('change', function() {
-            showSection(this.value);
-        });
-    }
-
-    // When selecting a student in the assign form, refresh available rooms
-    const roomStudent = document.getElementById('roomStudent');
-    if (roomStudent) {
-        roomStudent.addEventListener('change', populateDropdowns);
-    }
-
-    // Add student functionality
-    const addStudentForm = document.getElementById('addStudentForm');
-    if (addStudentForm) {
-        addStudentForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const student = {
-                id: Date.now(),
-                nombre: document.getElementById('studentNombre').value,
-                fechaNacimiento: document.getElementById('studentNacimiento').value,
-                mayor16: !!document.getElementById('studentMayor16').checked,
-                gender: document.getElementById('studentGenero').value,
-                curso: document.getElementById('studentCurso').value,
-                telefono1: document.getElementById('studentTelefono1').value,
-                telefono2: document.getElementById('studentTelefono2').value,
-                habitacion: null
-            };
-            const age = calculateAge(student.fechaNacimiento);
-            student.ageGroup = (age !== null && age >= 18) ? 'mayor' : 'menor';
-            students.push(student);
-            saveData();
-            updateDashboard();
-            updateStudentsTable();
-            populateDropdowns();
-            this.reset();
-            addActivity(`Nuevo alumno añadido: ${student.nombre}`);
-        });
-    }
-
-    // Assign room functionality
-    const assignRoomForm = document.getElementById('assignRoomForm');
-    if (assignRoomForm) {
-        assignRoomForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const studentId = parseInt(document.getElementById('roomStudent').value);
-            const roomNumber = document.getElementById('roomNumber').value;
-            const selectedBed = document.getElementById('roomBed') ? document.getElementById('roomBed').value : '';
-            const student = students.find(s => s.id === studentId);
-            const room = rooms.find(r => r.number === roomNumber);
-            if (!student || !room) return;
-            const studentGender = student.gender;
-            if (room.gender && room.gender !== 'mixta' && studentGender !== 'otro' && room.gender !== studentGender) {
-                alert('La habitación seleccionada no es compatible con el género del alumno.');
-                return;
-            }
-            let emptyBed = null;
-            if (selectedBed) {
-                if (room.beds[selectedBed] !== null) {
-                    alert(`La cama ${selectedBed} ya está ocupada en esta habitación.`);
-                    return;
-                }
-                emptyBed = selectedBed;
-            } else {
-                emptyBed = Object.keys(room.beds).find(bed => room.beds[bed] === null);
-            }
-            if (!emptyBed) {
-                alert('La habitación está llena. No hay camas disponibles.');
-                return;
-            }
-            if (student.habitacion) {
-                const previousRoom = rooms.find(r => r.number === student.habitacion);
-                if (previousRoom && student.cama) {
-                    previousRoom.beds[student.cama] = null;
-                    previousRoom.occupied--;
-                }
-            }
-            student.habitacion = roomNumber;
-            student.cama = emptyBed;
-            room.beds[emptyBed] = studentId;
-            room.occupied++;
-            saveData();
-            updateDashboard();
-            updateStudentsTable();
-            updateRoomsGrid();
-            populateDropdowns();
-            this.reset();
-            addActivity(`Asignada habitación ${roomNumber} cama ${emptyBed} a ${student.nombre}`);
-        });
-    }
-
-    // Add absence functionality
-    const addAbsenceForm = document.getElementById('addAbsenceForm');
-    if (addAbsenceForm) {
-        addAbsenceForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const absence = {
-                id: Date.now(),
-                studentId: parseInt(document.getElementById('absenceStudent').value),
-                fecha: document.getElementById('absenceDate').value,
-                descripcion: document.getElementById('absenceDescription').value
-            };
-            absences.push(absence);
-            saveData();
-            updateDashboard();
-            updateAbsencesTable();
-            this.reset();
-            addActivity(`Nueva falta registrada para el alumno ${students.find(s => s.id === absence.studentId)?.nombre}`);
-        });
-    }
-
-    // Add report functionality
-    const addReportForm = document.getElementById('addReportForm');
-    if (addReportForm) {
-        addReportForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const report = {
-                id: Date.now(),
-                studentId: parseInt(document.getElementById('reportStudent').value),
-                fecha: document.getElementById('reportDate').value,
-                descripcion: document.getElementById('reportDescription').value
-            };
-            reports.push(report);
-            saveData();
-            updateDashboard();
-            updateReportsTable();
-            this.reset();
-            addActivity(`Nuevo informe registrado para el alumno ${students.find(s => s.id === report.studentId)?.nombre}`);
-        });
-    }
-
-    // Add seguimiento functionality
-    const addSeguimientoForm = document.getElementById('addSeguimientoForm');
-    if (addSeguimientoForm) {
-        addSeguimientoForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const seguimiento = {
-                id: Date.now(),
-                studentId: parseInt(document.getElementById('seguimientoStudent').value),
-                fecha: document.getElementById('seguimientoDate').value,
-                descripcion: document.getElementById('seguimientoDescription').value
-            };
-            if (!seguimientos[seguimiento.studentId]) {
-                seguimientos[seguimiento.studentId] = [];
-            }
-            seguimientos[seguimiento.studentId].push(seguimiento);
-            saveData();
-            updateSeguimientoTable(seguimiento.studentId);
-            this.reset();
-            addActivity(`Nuevo seguimiento registrado para el alumno ${students.find(s => s.id === seguimiento.studentId)?.nombre}`);
-        });
-    }
-
-    // Filter absences
-    const filterStudent = document.getElementById('filterStudent');
-    if (filterStudent) {
-        filterStudent.addEventListener('change', updateAbsencesTable);
-    }
-    const filterDate = document.getElementById('filterDate');
-    if (filterDate) {
-        filterDate.addEventListener('change', updateAbsencesTable);
-    }
-    const clearFilters = document.getElementById('clearFilters');
-    if (clearFilters) {
-        clearFilters.addEventListener('click', function() {
-            document.getElementById('filterStudent').value = '';
-            document.getElementById('filterDate').value = '';
-            updateAbsencesTable();
-        });
-    }
 });
