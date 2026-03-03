@@ -1,6 +1,29 @@
 // --- Supabase setup ---
-// Using global supabase variable from CDN
-// The supabase client is already initialized in index.html
+let supabaseConnected = false;
+let supabaseClient = null;
+
+async function initializeSupabase() {
+    try {
+        if (typeof window.supabase !== 'undefined' && window.supabase) {
+            supabaseClient = window.supabase;
+            const { data, error } = await supabaseClient.from('students').select('id').limit(1);
+            if (error) {
+                console.warn('Supabase connection test failed:', error.message);
+                supabaseConnected = false;
+            } else {
+                console.log('Supabase connected successfully');
+                supabaseConnected = true;
+            }
+        } else {
+            console.warn('Supabase library not available');
+            supabaseConnected = false;
+        }
+    } catch (e) {
+        console.warn('Error initializing Supabase:', e.message);
+        supabaseConnected = false;
+    }
+}
+
 
 // Helper function to ensure DOM is ready
 function onDOMReady(callback) {
@@ -36,31 +59,36 @@ const users = {
 // --- Save/Load functions ---
 async function saveData() {
     try {
-        // Save students
-        if (students.length > 0) {
-            const { error } = await supabase
-                .from('students')
-                .upsert(students, { onConflict: 'id' });
-            if (error) console.error('Error saving students:', error);
+        if (supabaseConnected && supabaseClient) {
+            // Save students
+            if (students.length > 0) {
+                const { error } = await supabaseClient
+                    .from('students')
+                    .upsert(students, { onConflict: 'id' });
+                if (error) console.warn('Error saving students:', error.message);
+                else console.log('Students saved to Supabase');
+            }
+
+            // Save absences
+            if (absences.length > 0) {
+                const { error } = await supabaseClient
+                    .from('absences')
+                    .upsert(absences, { onConflict: 'id' });
+                if (error) console.warn('Error saving absences:', error.message);
+                else console.log('Absences saved to Supabase');
+            }
+
+            // Save reports
+            if (reports.length > 0) {
+                const { error } = await supabaseClient
+                    .from('reports')
+                    .upsert(reports, { onConflict: 'id' });
+                if (error) console.warn('Error saving reports:', error.message);
+                else console.log('Reports saved to Supabase');
+            }
         }
 
-        // Save absences
-        if (absences.length > 0) {
-            const { error } = await supabase
-                .from('absences')
-                .upsert(absences, { onConflict: 'id' });
-            if (error) console.error('Error saving absences:', error);
-        }
-
-        // Save reports
-        if (reports.length > 0) {
-            const { error } = await supabase
-                .from('reports')
-                .upsert(reports, { onConflict: 'id' });
-            if (error) console.error('Error saving reports:', error);
-        }
-
-        // Also save to localStorage as backup
+        // Always save to localStorage as backup
         localStorage.setItem('students', JSON.stringify(students));
         localStorage.setItem('absences', JSON.stringify(absences));
         localStorage.setItem('reports', JSON.stringify(reports));
@@ -89,15 +117,21 @@ async function addStudent(alumno) {
     students.push(student);
     
     // Save to Supabase immediately
-    try {
-        const { error } = await supabase
-            .from('students')
-            .insert([student]);
-        if (error) {
-            console.error('Error adding student to Supabase:', error);
+    if (supabaseConnected && supabaseClient) {
+        try {
+            const { error } = await supabaseClient
+                .from('students')
+                .insert([student]);
+            if (error) {
+                console.warn('Error adding student to Supabase:', error.message);
+            } else {
+                console.log('Student saved to Supabase');
+            }
+        } catch (error) {
+            console.error('Error:', error);
         }
-    } catch (error) {
-        console.error('Error:', error);
+    } else {
+        console.log('Student added to memory (will sync on next connection)');
     }
     
     return student;
@@ -321,29 +355,44 @@ function createConfetti() {
 // --- Load data from Supabase ---
 async function loadData() {
     try {
-        // Fetch students
-        const { data: studentsData, error: studentsError } = await supabase
-            .from('students')
-            .select('*');
+        let loadedFromSupabase = false;
+        
+        if (supabaseConnected && supabaseClient) {
+            console.log('Loading data from Supabase...');
+            
+            // Fetch students
+            const { data: studentsData, error: studentsError } = await supabaseClient
+                .from('students')
+                .select('*');
+            if (!studentsError) {
+                students = studentsData || [];
+                loadedFromSupabase = true;
+                console.log('Loaded students from Supabase:', students.length);
+            }
 
-        students = studentsError ? [] : (studentsData || []);
-        if (studentsError) console.error('Error loading students:', studentsError);
+            // Fetch absences
+            const { data: absencesData, error: absencesError } = await supabaseClient
+                .from('absences')
+                .select('*');
+            if (!absencesError) {
+                absences = absencesData || [];
+                console.log('Loaded absences from Supabase:', absences.length);
+            }
 
-        // Fetch absences
-        const { data: absencesData, error: absencesError } = await supabase
-            .from('absences')
-            .select('*');
-
-        absences = absencesError ? [] : (absencesData || []);
-        if (absencesError) console.error('Error loading absences:', absencesError);
-
-        // Fetch reports
-        const { data: reportsData, error: reportsError } = await supabase
-            .from('reports')
-            .select('*');
-
-        reports = reportsError ? [] : (reportsData || []);
-        if (reportsError) console.error('Error loading reports:', reportsError);
+            // Fetch reports
+            const { data: reportsData, error: reportsError } = await supabaseClient
+                .from('reports')
+                .select('*');
+            if (!reportsError) {
+                reports = reportsData || [];
+                console.log('Loaded reports from Supabase:', reports.length);
+            }
+        } else {
+            console.log('Loading from localStorage (Supabase not connected)');
+        }
+        
+        // Fallback to localStorage if Supabase failed
+        if (!loadedFromSupabase) {
 
         // Initialize UI
         initializeRooms();
@@ -394,32 +443,34 @@ async function initApp() {
 }
 
 // Initialize event listeners when DOM is ready
-document.addEventListener('DOMContentLoaded', function() {
-    // Initialize app
-    initApp();
-
-    // Login functionality
+document.addEventListener('DOMContentLoaded', async function() {
+    // Initialize Supabase connection first
+    console.log('Initializing Supabase connection...');
+    await initializeSupabase();
+    
+    // Login functionality - SETUP FIRST before async operations
     const loginForm = document.getElementById('loginForm');
     if (loginForm) {
         loginForm.addEventListener('submit', function(e) {
-    e.preventDefault();
-    
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
-    const errorDiv = document.getElementById('loginError');
-    
-    if (users[username] && users[username] === password) {
-        currentUser = username;
-        document.getElementById('currentUser').textContent = `Bienvenido, ${username}`;
-        document.getElementById('loginScreen').classList.add('hidden');
-        document.getElementById('mainApp').classList.remove('hidden');
-        loadData();
-        showSection('dashboard');
-        errorDiv.classList.add('hidden');
-    } else {
-        errorDiv.textContent = 'Usuario o contraseña incorrectos';
-        errorDiv.classList.remove('hidden');
-    }
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('loginError');
+            
+            if (users[username] && users[username] === password) {
+                currentUser = username;
+                const currentUserEl = document.getElementById('currentUser');
+                if (currentUserEl) currentUserEl.textContent = `Bienvenido, ${username}`;
+                document.getElementById('loginScreen').classList.add('hidden');
+                document.getElementById('mainApp').classList.remove('hidden');
+                loadData();
+                showSection('dashboard');
+                errorDiv.classList.add('hidden');
+            } else {
+                errorDiv.textContent = 'Usuario o contraseña incorrectos';
+                errorDiv.classList.remove('hidden');
+            }
         });
     }
 
@@ -427,12 +478,12 @@ document.addEventListener('DOMContentLoaded', function() {
     const logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) {
         logoutBtn.addEventListener('click', function() {
-    currentUser = '';
-    document.getElementById('username').value = '';
-    document.getElementById('password').value = '';
-    document.getElementById('loginScreen').classList.remove('hidden');
-    document.getElementById('mainApp').classList.add('hidden');
-    document.getElementById('loginError').classList.add('hidden');
+            currentUser = '';
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+            document.getElementById('loginScreen').classList.remove('hidden');
+            document.getElementById('mainApp').classList.add('hidden');
+            document.getElementById('loginError').classList.add('hidden');
         });
     }
 
@@ -468,7 +519,7 @@ function showSection(sectionName) {
 }
 
 // Add student functionality
-document.getElementById('addStudentForm').addEventListener('submit', async function(e) {
+document.getElementById('addStudentForm')?.addEventListener('submit', async function(e) {
     e.preventDefault();
 
     const student = {
@@ -490,13 +541,16 @@ document.getElementById('addStudentForm').addEventListener('submit', async funct
     students.push(student);
     
     // Save to Supabase
-    try {
-        const { error } = await supabase
-            .from('students')
-            .insert([student]);
-        if (error) console.error('Error adding student:', error);
-    } catch (error) {
-        console.error('Error:', error);
+    if (supabaseConnected && supabaseClient) {
+        try {
+            const { error } = await supabaseClient
+                .from('students')
+                .insert([student]);
+            if (error) console.warn('Error adding student:', error.message);
+            else console.log('Student saved to Supabase');
+        } catch (error) {
+            console.error('Error:', error);
+        }
     }
     
     saveData();
@@ -695,7 +749,7 @@ function updateAbsencesTable() {
 }
 
 // Assign room functionality
-document.getElementById('assignRoomForm').addEventListener('submit', async function(e) {
+document.getElementById('assignRoomForm')?.addEventListener('submit', async function(e) {
     e.preventDefault();
     
     const studentId = parseInt(document.getElementById('roomStudent').value);
@@ -746,14 +800,17 @@ document.getElementById('assignRoomForm').addEventListener('submit', async funct
     room.occupied++;
     
     // Save to Supabase
-    try {
-        const { error } = await supabase
-            .from('students')
-            .update({ habitacion: roomNumber, cama: emptyBed })
-            .eq('id', studentId);
-        if (error) console.error('Error updating student room:', error);
-    } catch (error) {
-        console.error('Error:', error);
+    if (supabaseConnected && supabaseClient) {
+        try {
+            const { error } = await supabaseClient
+                .from('students')
+                .update({ habitacion: roomNumber, cama: emptyBed })
+                .eq('id', studentId);
+            if (error) console.warn('Error updating student room:', error.message);
+            else console.log('Student room assignment saved to Supabase');
+        } catch (error) {
+            console.error('Error:', error);
+        }
     }
     
     saveData();
@@ -769,7 +826,7 @@ document.getElementById('assignRoomForm').addEventListener('submit', async funct
 });
 
 // Add absence functionality
-document.getElementById('addAbsenceForm').addEventListener('submit', async function(e) {
+document.getElementById('addAbsenceForm')?.addEventListener('submit', async function(e) {
     e.preventDefault();
     
     const absence = {
@@ -782,15 +839,17 @@ document.getElementById('addAbsenceForm').addEventListener('submit', async funct
     absences.push(absence);
     
     // Save to Supabase
-    try {
-        const { error } = await supabase
-            .from('absences')
-            .insert([absence]);
-        if (error) console.error('Error adding absence:', error);
-    } catch (error) {
-        console.error('Error:', error);
+    if (supabaseConnected && supabaseClient) {
+        try {
+            const { error } = await supabaseClient
+                .from('absences')
+                .insert([absence]);
+            if (error) console.warn('Error adding absence:', error.message);
+            else console.log('Absence saved to Supabase');
+        } catch (error) {
+            console.error('Error:', error);
+        }
     }
-    
     saveData();
     updateDashboard();
     updateAbsencesTable();
@@ -823,13 +882,16 @@ document.getElementById('addReportForm')?.addEventListener('submit', async funct
     reports.push(report);
     
     // Save to Supabase
-    try {
-        const { error } = await supabase
-            .from('reports')
-            .insert([report]);
-        if (error) console.error('Error adding report:', error);
-    } catch (error) {
-        console.error('Error:', error);
+    if (supabaseConnected && supabaseClient) {
+        try {
+            const { error } = await supabaseClient
+                .from('reports')
+                .insert([report]);
+            if (error) console.warn('Error adding report:', error.message);
+            else console.log('Report saved to Supabase');
+        } catch (error) {
+            console.error('Error:', error);
+        }
     }
     
     saveData();
@@ -1043,7 +1105,6 @@ document.getElementById('addSeguimientoForm')?.addEventListener('submit', async 
     if (!student) return;
 
     if (!student.academic) student.academic = { records: [] };
-
     const record = {
         id: Date.now(),
         fecha,
@@ -1056,14 +1117,17 @@ document.getElementById('addSeguimientoForm')?.addEventListener('submit', async 
     student.academic.records.push(record);
     
     // Save to Supabase
-    try {
-        const { error } = await supabase
-            .from('students')
-            .update({ academic: student.academic })
-            .eq('id', studentId);
-        if (error) console.error('Error adding academic record:', error);
-    } catch (error) {
-        console.error('Error:', error);
+    if (supabaseConnected && supabaseClient) {
+        try {
+            const { error } = await supabaseClient
+                .from('students')
+                .update({ academic: student.academic })
+                .eq('id', studentId);
+            if (error) console.warn('Error adding academic record:', error.message);
+            else console.log('Academic record saved to Supabase');
+        } catch (error) {
+            console.error('Error:', error);
+        }
     }
     
     saveData();
@@ -1234,13 +1298,15 @@ async function deleteReport(reportId) {
         reports = reports.filter(r => r.id !== reportId);
         
         // Delete from Supabase
-        try {
-            await supabase
-                .from('reports')
-                .delete()
-                .eq('id', reportId);
-        } catch (error) {
-            console.error('Error deleting report:', error);
+        if (supabaseConnected && supabaseClient) {
+            try {
+                await supabaseClient
+                    .from('reports')
+                    .delete()
+                    .eq('id', reportId);
+            } catch (error) {
+                console.error('Error deleting report:', error);
+            }
         }
         
         saveData();
@@ -1250,9 +1316,12 @@ async function deleteReport(reportId) {
 }
 
 // Filter functionality
-document.getElementById('filterStudent').addEventListener('change', updateAbsencesTable);
-document.getElementById('filterDate').addEventListener('change', updateAbsencesTable);
-document.getElementById('clearFilters').addEventListener('click', function() {
+const filterStudentEl = document.getElementById('filterStudent');
+if (filterStudentEl) filterStudentEl.addEventListener('change', updateAbsencesTable);
+const filterDateEl = document.getElementById('filterDate');
+if (filterDateEl) filterDateEl.addEventListener('change', updateAbsencesTable);
+const clearFiltersEl = document.getElementById('clearFilters');
+if (clearFiltersEl) clearFiltersEl.addEventListener('click', function() {
     document.getElementById('filterStudent').value = '';
     document.getElementById('filterDate').value = '';
     updateAbsencesTable();
@@ -1279,16 +1348,22 @@ async function deleteStudent(studentId) {
         absences = absences.filter(a => a.studentId !== studentId);
 
         // Delete from Supabase
-        try {
-            await supabase
-                .from('students')
-                .delete()
-                .eq('id', studentId);
-            
-            // Delete related absences from Supabase
-            await supabase
-                .from('absences')
-                .delete()
+        if (supabaseConnected && supabaseClient) {
+            try {
+                await supabaseClient
+                    .from('students')
+                    .delete()
+                    .eq('id', studentId);
+                
+                // Delete related absences from Supabase
+                await supabaseClient
+                    .from('absences')
+                    .delete()
+                    .eq('studentId', studentId);
+            } catch (error) {
+                console.error('Error deleting student:', error);
+            }
+        }
                 .eq('studentId', studentId);
         } catch (error) {
             console.error('Error deleting student:', error);
@@ -1311,13 +1386,15 @@ async function deleteAbsence(absenceId) {
         absences = absences.filter(a => a.id !== absenceId);
         
         // Delete from Supabase
-        try {
-            await supabase
-                .from('absences')
-                .delete()
-                .eq('id', absenceId);
-        } catch (error) {
-            console.error('Error deleting absence:', error);
+        if (supabaseConnected && supabaseClient) {
+            try {
+                await supabaseClient
+                    .from('absences')
+                    .delete()
+                    .eq('id', absenceId);
+            } catch (error) {
+                console.error('Error deleting absence:', error);
+            }
         }
         
         saveData();

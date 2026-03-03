@@ -9,9 +9,21 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/supabase.min.js"></script>
 <script>
+  // Initialize Supabase safely
   const SUPABASE_URL = "https://upznvkoiiiazvnuowhdr.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_TaFJ0GGjMhmCGnGi4N4dyA_auGwFljE";
-  const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  
+  // Check if window.supabase exists (from CDN)
+  if (window.supabase && window.supabase.createClient) {
+    try {
+      window.supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    } catch (e) {
+      console.warn('Failed to initialize Supabase:', e);
+      // Fallback stub will be used from app.js
+    }
+  } else {
+    console.warn('Supabase library not loaded from CDN, will use fallback');
+  }
 </script>
 
 
